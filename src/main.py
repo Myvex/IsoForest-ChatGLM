@@ -1,40 +1,61 @@
 # src/main.py
-import argparse
-import pandas as pd
-import joblib
-import os
 
+import argparse
+import joblib
+
+import pandas as pd
 from feature_extractor import LogFeatureExtractor
 from anomaly_detector import LogAnomalyDetector
 
-def main(log_file: str, model_path: str = None, train: bool = False):
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Log anomaly detection")
+    parser.add_argument("log_file", help="Path to the log file")
+    parser.add_argument("--model", default="model.pkl", help="Path to save/load the model")
+    parser.add_argument("--train", action="store_true", help="Train a new model")
+    args = parser.parse_args()
+
+    # ------------------------------------------------------------------
+    # 1. 读取日志并提取特征
+    # ------------------------------------------------------------------
     extractor = LogFeatureExtractor(tfidf_max_features=500)
-    raw_df = extractor.load_logs(log_file)
+    raw_df = extractor.load_logs(args.log_file)
     features = extractor.extract_features(raw_df)
 
-    if train:
-        detector = LogAnomalyDetector(contamination=0.01)
+    # ------------------------------------------------------------------
+    # 2. 训练 / 预测
+    # ------------------------------------------------------------------
+    if args.train:
+        detector = LogAnomalyDetector(contamination=0.05)
         detector.fit(features)
-        joblib.dump(detector, model_path)
-        print(f"[INFO] 训练完成，模型已保存到 {model_path}")
-    else:
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"模型文件 {model_path} 不存在")
-        detector: LogAnomalyDetector = joblib.load(model_path)
-        preds = detector.predict(features)
-        raw_df['anomaly'] = preds
-        # 输出异常日志
-        anomalies = raw_df[raw_df['anomaly'] == -1]
-        print(f"[INFO] 检测到 {len(anomalies)} 条异常日志")
-        anomalies.to_csv('anomalies.csv', index=False)
+        joblib.dump(detector, args.model)
+        print(f"[INFO] 训练完成，模型已保存到 {args.model}")
+        return
 
-        # 可视化
-        detector.plot_scores(features)
+    detector = joblib.load(args.model)
+    preds = detector.predict(features)
+    raw_df["anomaly"] = preds
+
+    # ------------------------------------------------------------------
+    # 3. 输出异常结果
+    # ------------------------------------------------------------------
+    anomalies = raw_df[raw_df["anomaly"] == -1]
+    unique_anomalies = anomalies.drop_duplicates(subset=["message", "slot", "chip"])
+    print(raw_df.columns.tolist())
+    print(f"[INFO] 检测到 {len(anomalies)} 条异常日志")
+    anomalies.to_csv("anomalies.csv", index=False)
+    df = pd.read_csv('anomalies.csv', dtype=str) 
+    group_cols = ['timestamp','message', 'slot', 'chip']    # 分组键
+    merged_df = df.drop_duplicates(subset=group_cols, keep='first')
+    merged_df.to_csv('anomalies.csv', index=False)
+
+
+    # 打印异常日志并显示 slot 与 chip
+    for _, row in anomalies.iterrows():
+        slot = row.get("slot", "N/A")
+        chip = row.get("chip", "N/A")
+        # print(f"[异常] slot={slot} chip={chip} {row['message']}")
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Isolation Forest 日志异常检测")
-    parser.add_argument("log_file", help="待分析的日志文件路径")
-    parser.add_argument("--model", default="isolation_forest.pkl", help="模型文件路径")
-    parser.add_argument("--train", action="store_true", help="是否训练模型")
-    args = parser.parse_args()
-    main(args.log_file, args.model, args.train)
+    main()
